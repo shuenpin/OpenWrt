@@ -3,7 +3,7 @@ name: ARMv8 Docker BuildX
 on:
   workflow_dispatch:
   schedule:
-    - cron: 0 0 * * 6
+    - cron: 0 23 * * 5
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
@@ -53,8 +53,8 @@ jobs:
     - name: Clone Source Code
       run: |
         df -hT $GITHUB_WORKSPACE
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
-        cd openwrt
+        git clone $REPO_URL -b $REPO_BRANCH workdir/openwrt
+        cd workdir/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
 
     - name: Install Feeds
@@ -92,7 +92,7 @@ jobs:
         make -j$(nproc) || make -j1 || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: Generate Firmware
+    - name: Generate OpenWrt Firmware
       if: steps.compile.outputs.status == 'success'
       id: generate
       run: |
@@ -119,8 +119,8 @@ jobs:
       if: steps.generate.outputs.status == 'success'
       uses: docker/build-push-action@master
       with:
-        context: docker
         platforms: linux/arm64
+        context: docker
         push: true
         tags: |
           ${{ env.DOCKER_IMAGE }}:${{ env.TAG }}
