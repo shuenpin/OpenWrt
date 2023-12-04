@@ -3,7 +3,7 @@ name: ARMv8 Docker OpenWrt
 on:
   workflow_dispatch:
   schedule:
-    - cron: 0 23 * * 5
+    - cron: 0 21 * * 5
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
@@ -11,8 +11,7 @@ env:
   CONFIG_FILE: configs/armv8-docker.config
   DIY_SCRIPT: diy-script.sh
   CLASH_KERNEL: arm64
-  DOCKER_BUILD: buildImageX.sh
-  DOCKER_IMAGE: summary/openwrt-aarch64
+  FIRMWARE_TAG: ARMv8_Docker
   TZ: Asia/Shanghai
 
 jobs:
@@ -52,11 +51,11 @@ jobs:
     - name: Clone Source Code
       run: |
         df -hT $GITHUB_WORKSPACE
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
-        cd openwrt
+        git clone $REPO_URL -b $REPO_BRANCH workdir/openwrt
+        cd workdir/openwrt
         echo "OPENWRT_PATH=$PWD" >> $GITHUB_ENV
-        version=$(cat "package/lean/default-settings/files/zzz-default-settings" | grep DISTRIB_REVISION= | awk -F "'" '{print $2}')
-        echo "TAG=$version" >> $GITHUB_ENV
+        VERSION_INFO=$(git show -s --date=short --format="Author: %an<br/>date: %cd<br/>commit: %s<br/>commit hash: %H")
+        echo "VERSION_INFO=$VERSION_INFO" >> $GITHUB_ENV
 
     - name: Install Feeds
       run: |
@@ -83,24 +82,84 @@ jobs:
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: Compile Firmware
-      id: compile
+    - name: Compile Packages
+      run: |
+        cd $OPENWRT_PATH
+        echo -e "$(nproc) thread compile"
+        make tools/compile -j$(nproc) || make tools/compile -j1 V=s
+        make toolchain/compile -j$(nproc) || make toolchain/compile -j1 V=s
+        make diffconfig
+        make target/compile -j$(nproc) || make target/compile -j1 V=s IGNORE_ERRORS=1
+        make package/compile -j$(nproc) IGNORE_ERRORS=1 || make package/compile -j1 V=s IGNORE_ERRORS=1
+        make package/index
+
+    - name: Generate Firmware
+      id: generate
       run: |
         cd $OPENWRT_PATH
         mkdir -p files/etc/uci-defaults
         cp $GITHUB_WORKSPACE/scripts/init-settings.sh files/etc/uci-defaults/99-init-settings
-        echo -e "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        make package/install -j$(nproc) || make package/install -j1 V=s
+        make target/install -j$(nproc) || make target/install -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
+        make checksum
+        echo "DATE=$(date +"%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
 
-    - name: Generate Firmware
-      if: steps.compile.outputs.status == 'success'
-      id: generate
+    - name: Check Space Usage
+      if: (!cancelled())
+      run: df -hT
+
+    - name: Organize Files
+      if: steps.generate.outputs.status == 'success'
       run: |
         cd $OPENWRT_PATH/bin/targets/*/*
-        cat config.buildinfo
-        cp *rootfs.tar.gz $GITHUB_WORKSPACE/docker
+        cat sha256sums
+        cp $OPENWRT_PATH/.config build.config
+        mv -f $OPENWRT_PATH/bin/packages/*/*/*.ipk packages
+        tar -zcf Packages.tar.gz packages
+        rm -rf packages feeds.buildinfo version.buildinfo
+        echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+
+    - name: Upload Firmware To Release
+      if: steps.generate.outputs.status == 'success'
+      uses: ncipollo/release-action@v1
+      with:
+        name: R${{ env.DATE }} for ${{ env.FIRMWARE_TAG }}
+        allowUpdates: true
+        tag: ${{ env.FIRMWARE_TAG }}
+        token: ${{ secrets.GITHUB_TOKEN }}
+        artifacts: ${{ env.FIRMWARE_PATH }}/*
+        body: |
+          **This is Docker Firmware for Armvirt 64**
+          * 这是 ARMv8 Docker 镜像底包，每周六更新
+          默认 IP：192.168.1.1 默认密码：password
+          当前使用版本:【编译前的最后一次[➦主源码](https://github.com/coolsnowwolf/lede)更新记录】
+          ${{ env.VERSION_INFO }}
+
+  Upload:
+    needs: [Build]
+    runs-on: ubuntu-22.04
+
+    env:
+      DOCKER_BUILD: buildImageX.sh
+      DOCKER_IMAGE: summary/openwrt-aarch64
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@main
+
+    - name: Extract OpenWrt Version
+      run: |
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        cd $GITHUB_WORKSPACE/openwrt
+        version=$(cat "package/lean/default-settings/files/zzz-default-settings" | grep DISTRIB_REVISION= | awk -F "'" '{print $2}')
+        echo "TAG=$version" >> $GITHUB_ENV
+
+    - name: Extract OpenWrt Firmware
+      id: download
+      run: |
         cd $GITHUB_WORKSPACE/docker
+        wget -q $(curl -s "https://api.github.com/repos/$GITHUB_REPOSITORY/releases" | grep "ARMv8_Docker.*rootfs.tar.gz" | cut -d '"' -f 4)
         chmod +x $DOCKER_BUILD && ./$DOCKER_BUILD
         echo "status=success" >> $GITHUB_OUTPUT
 
@@ -117,11 +176,11 @@ jobs:
          password: ${{ secrets.DOCKER_PASSWORD }}
 
     - name: Build and Push Docker
-      if: steps.generate.outputs.status == 'success'
+      if: steps.download.outputs.status == 'success'
       uses: docker/build-push-action@master
       with:
-        context: docker
         platforms: linux/arm64
+        context: docker
         push: true
         tags: |
           ${{ env.DOCKER_IMAGE }}:${{ env.TAG }}
