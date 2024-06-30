@@ -109,7 +109,7 @@ sed -i "s/${orig_version}/R${date_version} by Haiibo/g" package/lean/default-set
 
 # 修复 hostapd 报错
 # cp -f $GITHUB_WORKSPACE/scripts/011-fix-mbo-modules-build.patch package/network/services/hostapd/patches/011-fix-mbo-modules-build.patch
-# cp -f $GITHUB_WORKSPACE/scripts/qmi_wwan_q.c package/wwan/driver/quectel_QMI_WWAN/src/qmi_wwan_q.c
+cp -f $GITHUB_WORKSPACE/scripts/qmi_wwan_q.c package/wwan/driver/quectel_QMI_WWAN/src/qmi_wwan_q.c
 
 # 修复 armv8 设备 xfsprogs 报错
 sed -i 's/TARGET_CFLAGS.*/TARGET_CFLAGS += -DHAVE_MAP_SYNC -D_LARGEFILE64_SOURCE/g' feeds/packages/utils/xfsprogs/Makefile
